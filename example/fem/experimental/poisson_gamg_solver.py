@@ -20,7 +20,7 @@ from fealpy.fem import PoissonLFEMSolver
 tmr = timer()
 next(tmr)
 
-p = 3
+p = 1
 n = 3
 pde_2d = CosCosData() 
 domain_2d = pde_2d.domain()

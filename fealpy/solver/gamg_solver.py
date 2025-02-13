@@ -215,7 +215,7 @@ class GAMGSolver():
                 break
 
             if (self.maxit is not None) and (niter >= self.maxit):
-                logger.info(f"CG: failed, stopped by maxit ({self.maxit}).")
+                logger.info(f"MG: failed, stopped by maxit ({self.maxit}).")
                 break
 
         # if self.ptype == 'V':
