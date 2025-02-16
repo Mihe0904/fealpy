@@ -28,7 +28,7 @@ class GAMGSolver():
             itype: str = 'T', # 插值方法
             ptype: str = 'V', # 预条件类型
             sstep: int = 2, # 默认光滑步数
-            isolver: str = 'PCG', # 默认迭代解法器，还可以选择'MG'
+            isolver: str = 'CG', # 默认迭代解法器，还可以选择'MG'
             maxit: int = 200,   # 默认迭代最大次数
             csolver: str = 'direct', # 默认粗网格解法器
             rtol: float = 1e-8,      # 相对误差收敛阈值
@@ -58,22 +58,20 @@ class GAMGSolver():
 
         # 1. 建立初步的算子存储结构
         self.A = [A]
-        self.L = [ ] # 下三角 
-        self.U = [ ] # 上三角
+        self.L = [] # 下三角 
+        self.U = [] # 上三角
         self.P = [ ] # 延拓算子
         self.R = [ ] # 限制矩阵
 
         # 2. 高次元空间到低次元空间的粗化
-        print(1)
         if space is not None:
-            print(2)
             Ps = space.prolongation_matrix(cdegree=cdegree)
             for p in Ps:
                 self.L.append(self.A[-1].tril())
                 self.U.append(self.A[-1].triu())
-                self.P.append(P)
+                self.P.append(p)
                 r = p.T.tocsr()
-                self.R.append(R)
+                self.R.append(r)
                 self.A.append(r @ self.A[-1] @ p)
 
         if P is not None:
@@ -183,6 +181,7 @@ class GAMGSolver():
 
 
     def mg_solve(self,r,x0=None):
+        # x_list = []
         info = {}
         if x0 is not None:
             x = x0
@@ -191,18 +190,19 @@ class GAMGSolver():
         niter = 0
         while True:
             if self.ptype == 'V':
-                a = r-self.A[0] @ x
                 x += self.vcycle(r-self.A[0] @ x)
-
+                # x_list.append(x.copy())
             elif self.ptype == 'W':
-                x += self.wcycle(r-self.A[0] @ x)   
+                x += self.wcycle(r-self.A[0] @ x) 
+                # x_list.append(x.copy())
             elif self.ptype == 'F':
-                x += self.fcycle(r-self.A[0] @ x)  
-
+                x += self.fcycle(r-self.A[0] @ x)
+                # x_list.append(x.copy())
+            
             niter +=1
             res = r - self.A[0] @ x
             res = bm.linalg.norm(res)
-            info['residual'] = res    
+            info['residual'] = res
             info['niter'] = niter
             if res < self.atol:
                 logger.info(f"MG: converged in {niter} iterations, "
@@ -218,19 +218,6 @@ class GAMGSolver():
                 logger.info(f"MG: failed, stopped by maxit ({self.maxit}).")
                 break
 
-        # if self.ptype == 'V':
-        #     for niter in range(self.maxit):
-        #         x += self.vcycle(r-self.A[0] @ x)   
-        # elif self.ptype == 'W':
-        #     for niter in range(self.maxit):
-        #         x += self.wcycle(r-self.A[0] @ x)   
-        # elif self.ptype == 'F':
-        #     for niter in range(self.maxit):
-        #         x += self.fcycle(r-self.A[0] @ x)   
-        # res = r - self.A[0] @ x
-        # res = bm.linalg.norm(res)
-        # info['residual'] = res    
-        # info['niter'] = self.pmaxit
         return x,info
     
     def vcycle(self, r, level=0):
@@ -246,7 +233,6 @@ class GAMGSolver():
         6. 在每个更细的空间中，先进行后磨光（即再次迭代求解），然后再将解延拓到下一个更细的空间中
         7. 重复步骤6，直到达到最细的网格。
         """
-
         NL = len(self.A)
         r = [None]*level + [r] # 残量列表
         e = [None]*level       # 求解列表 

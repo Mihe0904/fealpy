@@ -288,11 +288,13 @@ class TriangleMesh(SimplexMesh, Plotable):
         gdof1 = self.number_of_global_ipoints(p1)
         matrix_shape = (gdof1,gdof0)
 
+        kargs_node = bm.context(self.entity('node'))
+        kargs_cell = bm.context(self.entity('cell'))
         # 1. Interpolation points on the mesh nodes: Inherit the original interpolation points
         NN = self.number_of_nodes()
-        V_1 = bm.ones(NN)
-        I_1 = bm.arange(NN)
-        J_1 = bm.arange(NN)
+        V_1 = bm.ones(NN,**kargs_node)
+        I_1 = bm.arange(NN,**kargs_cell)
+        J_1 = bm.arange(NN,**kargs_cell)
 
         # 2. Interpolation points within the mesh edges
         NE = self.number_of_edges()

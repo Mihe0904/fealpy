@@ -73,6 +73,7 @@ def cg(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None, M: Optio
 
 def _cg_impl(A: SupportsMatmul, b: TensorLike, x0: TensorLike, M: SupportsMatmul, atol, rtol, maxit):
     # initialize
+    info = {}
     x = x0              # (dof, batch)
     r = b - A @ x       # (dof, batch)
     z = M @ r if M is not None else r
@@ -94,7 +95,8 @@ def _cg_impl(A: SupportsMatmul, b: TensorLike, x0: TensorLike, M: SupportsMatmul
         r_norm_new = sqrt_func(sum_func(rTr_new))
 
         n_iter += 1
-
+        info['residual'] = r_norm_new
+        info['niter'] = n_iter
         if r_norm_new < atol:
             logger.info(f"CG: converged in {n_iter} iterations, "
                         "stopped by absolute tolerance.")
@@ -113,7 +115,7 @@ def _cg_impl(A: SupportsMatmul, b: TensorLike, x0: TensorLike, M: SupportsMatmul
         p = z_new + beta[None, ...] * p
         r, z, rTr = r_new, z_new, rTr_new
 
-    return x
+    return x,info
 
     # @staticmethod
     # def setup_context(ctx, inputs, output):

@@ -44,7 +44,6 @@ def gs(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None,
         a = b - A.matmul(x)
         res = bm.linalg.norm(b-A.matmul(x))
         niter +=1
-        print("n=:", niter, "residual: ", res)
         if res < rtol :
             logger.info(f"Gauss Seidel: converged in {iter} iterations, "
                         "stopped by relative tolerance.")
