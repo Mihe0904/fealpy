@@ -62,7 +62,6 @@ class CSRTensor(SparseTensor):
             pass
         else:
             raise ValueError(f"values must be a Tensor or None, but got {type(values)}")
-
     def __repr__(self) -> str:
         return f"CSRTensor(crow={self._crow}, col={self._col}, "\
                + f"values={self._values}, shape={self.shape})"

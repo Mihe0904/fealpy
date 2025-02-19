@@ -55,20 +55,20 @@ def cg(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None, M: Optio
         if x0.shape != b.shape:
             raise ValueError("x0 and b must have the same shape")
     
-    if M is not None  and M.shape != A.shape:
-        raise ValueError("A and M must have the same shape")
+    # if M is not None  and M.shape != A.shape:
+    #     raise ValueError("A and M must have the same shape")
 
 
     if (not single_vector) and batch_first:
         b = bm.swapaxes(b, 0, 1)
         x0 = bm.swapaxes(x0, 0, 1)
 
-    sol = _cg_impl(A, b, x0,M,atol, rtol, maxit)
+    sol,info = _cg_impl(A, b, x0,M,atol, rtol, maxit)
 
     if (not single_vector) and batch_first:
         sol = bm.swapaxes(sol, 0, 1)
 
-    return sol
+    return sol,info
 
 
 def _cg_impl(A: SupportsMatmul, b: TensorLike, x0: TensorLike, M: SupportsMatmul, atol, rtol, maxit):

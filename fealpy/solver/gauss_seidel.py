@@ -54,4 +54,4 @@ def gs(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None,
             break
     info['residual'] = res    
     info['niter'] = niter 
-    return x, info 
+    return x
