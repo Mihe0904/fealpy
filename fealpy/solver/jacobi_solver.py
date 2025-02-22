@@ -13,7 +13,27 @@ class SupportsMatmul(Protocol):
 
 def jacobi(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None,
        atol: float=1e-12, rtol: float=1e-8,
-       maxit: Optional[int]=10000) -> TensorLike:
+       maxit: Optional[int]=10000, returninfo: bool=False) -> TensorLike:
+    """Solve a linear system Ax = b using the Conjugate Gradient (CG) method.
+
+    Parameters:
+        A (SupportsMatmul): The coefficient matrix of the linear system.
+        b (TensorLike): The right-hand side vector of the linear system, can be a 1D or 2D tensor.
+        x0 (TensorLike): Initial guess for the solution, a 1D or 2D tensor.\
+        Must have the same shape as b when reshaped appropriately.
+        atol (float, optional): Absolute tolerance for convergence. Default is 1e-12.
+        rtol (float, optional): Relative tolerance for convergence. Default is 1e-8.
+        maxit (int, optional): Maximum number of iterations allowed. Default is 10000.\
+        If not provided, the method will continue until convergence based on the given tolerances.
+        returninfo(bool):if or not return info{['residual],['niter]}
+
+    Returns:
+        Tensor: The approximate solution to the system Ax = b.
+
+    Raises:
+        ValueError: If inputs do not meet the specified conditions (e.g., A is not sparse, dimensions mismatch).
+    """
+    kargs = bm.context(b)
     
     assert isinstance(b, TensorLike), "b must be a Tensor"
     if x0 is not None:
@@ -24,7 +44,7 @@ def jacobi(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None,
         raise ValueError("b must be a 1D or 2D dense tensor")
 
     if x0 is None:
-        x0 = bm.zeros_like(b)
+        x0 = bm.zeros_like(b,**kargs)
     else:
         if x0.shape != b.shape:
             raise ValueError("x0 and b must have the same shape")
@@ -47,15 +67,17 @@ def jacobi(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None,
         a = b - A@x
         res = bm.linalg.norm(b-A@x)
         niter +=1
-        print("n=:", niter, "residual: ", res)
         if res < rtol :
             logger.info(f"Jacobi: converged in {iter} iterations, "
                         "stopped by relative tolerance.")
             break
 
         if (maxit is not None) and (niter >= maxit):
-            logger.info(f"Jacobi: failed, stopped by maxiter ({maxit}).")
+            logger.info(f"Jacobi: failed, stopped by maxit ({maxit}).")
             break
     info['residual'] = res    
     info['niter'] = niter 
-    return x, info 
+    if returninfo is True:
+        return x,info
+    if returninfo is True:
+        return x

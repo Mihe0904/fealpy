@@ -14,7 +14,7 @@ class SupportsMatmul(Protocol):
 def cg(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None, M: Optional[SupportsMatmul] = None, *,
        batch_first: bool=False,
        atol: float=1e-12, rtol: float=1e-8,
-       maxit: Optional[int]=10000) -> TensorLike:
+       maxit: Optional[int]=10000,returninfo: bool=False) -> TensorLike:
     """Solve a linear system Ax = b using the Conjugate Gradient (CG) method.
 
     Parameters:
@@ -28,6 +28,7 @@ def cg(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None, M: Optio
         rtol (float, optional): Relative tolerance for convergence. Default is 1e-8.
         maxit (int, optional): Maximum number of iterations allowed. Default is 10000.\
         If not provided, the method will continue until convergence based on the given tolerances.
+        returninfo(bool):if or not return info{['residual],['niter]}
 
     Returns:
         Tensor: The approximate solution to the system Ax = b.
@@ -67,8 +68,10 @@ def cg(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None, M: Optio
 
     if (not single_vector) and batch_first:
         sol = bm.swapaxes(sol, 0, 1)
-
-    return sol,info
+    if returninfo is True:
+        return sol,info
+    if returninfo is True:
+        return sol
 
 
 def _cg_impl(A: SupportsMatmul, b: TensorLike, x0: TensorLike, M: SupportsMatmul, atol, rtol, maxit):

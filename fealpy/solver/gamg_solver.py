@@ -2,7 +2,6 @@
 from ..backend import backend_manager as bm
 from ..operator import LinearOperator
 from .conjugate_gradient import cg
-# from .mumps import spsolve, spsolve_triangular
 from scipy.sparse.linalg import spsolve_triangular,spsolve
 from ..sparse.coo_tensor import COOTensor
 from ..sparse.csr_tensor import CSRTensor
@@ -28,12 +27,11 @@ class GAMGSolver():
             itype: str = 'T', # 插值方法
             ptype: str = 'V', # 预条件类型
             sstep: int = 1, # 默认光滑步数
-            isolver: str = 'CG', # 默认迭代解法器，还可以选择'MG'
+            isolver: str = 'MG', # 默认迭代解法器，还可以选择'MG'
             maxit: int = 200,   # 默认迭代最大次数
             csolver: str = 'direct', # 默认粗网格解法器
             rtol: float = 1e-8,      # 相对误差收敛阈值
             atol: float = 1e-8,      # 绝对误差收敛阈值
-            device: str = 'cpu',     #选择后端
             ):
         self.csize = csize 
         self.theta = theta
@@ -46,7 +44,6 @@ class GAMGSolver():
         self.csolver = csolver
         self.rtol = rtol
         self.atol = atol
-        self.device = device
 
     def setup(self, A, P=None, R=None, mesh=None, space=None, cdegree=[1]):
         """
@@ -65,10 +62,6 @@ class GAMGSolver():
         self.P = [ ] # 延拓算子
         self.R = [ ] # 限制矩阵
 
-        if self.device == 'cpu':
-            from scipy.sparse.linalg import spsolve_triangular,spsolve
-        elif self.device == 'cuda':
-            from .direct_solver import spsolve_triangular,spsolve
         # 2. 高次元空间到低次元空间的粗化
         if space is not None:
             Ps = space.prolongation_matrix(cdegree=cdegree)
@@ -241,45 +234,24 @@ class GAMGSolver():
         e = [None]*level       # 求解列表 
 
         # 前磨光
-        if self.device == 'cpu':
-            for l in range(level, NL - 1, 1):
-                el = spsolve_triangular(self.L[l].to_scipy(), r[l])
-                for i in range(self.sstep):
-                    el += spsolve_triangular(self.L[l].to_scipy(), r[l] - self.A[l] @ el)
-                e.append(el)
-                r.append(self.R[l] @ (r[l] - self.A[l] @ el))
-
-            el = spsolve(self.A[-1].to_scipy(), r[-1])
+        for l in range(level, NL - 1, 1):
+            el = spsolve_triangular(self.L[l].to_scipy(), r[l])
+            for i in range(self.sstep):
+                el += spsolve_triangular(self.L[l].to_scipy(), r[l] - self.A[l] @ el)
             e.append(el)
+            r.append(self.R[l] @ (r[l] - self.A[l] @ el))
 
-            # 后磨光
-            for l in range(NL - 2, level - 1, -1):
-                e[l] += self.P[l] @ e[l + 1]
+        el = spsolve(self.A[-1].to_scipy(), r[-1])
+        e.append(el)
+
+        # 后磨光
+        for l in range(NL - 2, level - 1, -1):
+            e[l] += self.P[l] @ e[l + 1]
+            e[l] += spsolve_triangular(self.U[l].to_scipy(), r[l] - self.A[l] @ e[l],lower=False)
+            for i in range(self.sstep): # 后磨光
                 e[l] += spsolve_triangular(self.U[l].to_scipy(), r[l] - self.A[l] @ e[l],lower=False)
-                for i in range(self.sstep): # 后磨光
-                    e[l] += spsolve_triangular(self.U[l].to_scipy(), r[l] - self.A[l] @ e[l],lower=False)
 
-            return e[level]
-        
-        elif self.device == 'cuda':
-            for l in range(level, NL - 1, 1):
-                el = bm.tensor(spsolve_triangular(self.L[l], r[l]),**self.kargs)
-                for i in range(self.sstep):
-                    el += bm.tensor(spsolve_triangular(self.L[l], r[l] - self.A[l] @ el),**self.kargs)
-                e.append(el)
-                r.append(self.R[l] @ (r[l] - self.A[l] @ el))
-
-            el = spsolve(self.A[-1].to_scipy(), r[-1])
-            e.append(el)
-
-            # 后磨光
-            for l in range(NL - 2, level - 1, -1):
-                e[l] += self.P[l] @ e[l + 1]
-                e[l] += bm.tensor(spsolve_triangular(self.U[l], r[l] - self.A[l] @ e[l],lower=False),**self.kargs)
-                for i in range(self.sstep): # 后磨光
-                    e[l] += bm.tensor(spsolve_triangular(self.U[l], r[l] - self.A[l] @ e[l],lower=False),**self.kargs)
-
-            return e[level]
+        return e[level]
 
     
     def wcycle(self, r, level=0):
@@ -290,45 +262,26 @@ class GAMGSolver():
         @param level 空间层编号
         """
         NL = len(self.A)
-        if self.device == 'cpu':
-            if level == (NL - 1): # 如果是最粗层
-                e = spsolve(self.A[-1].to_scipy(), r)
-                return e
-
-            e = spsolve_triangular(self.L[level].to_scipy(), r)
-            for s in range(self.sstep):
-                e += spsolve_triangular(self.L[level].to_scipy(), r - self.A[level] @ e) 
-
-            rc = self.R[level] @ ( r - self.A[level] @ e) 
-
-            ec = self.wcycle(rc, level=level+1)
-            ec += self.wcycle( rc - self.A[level+1] @ ec, level=level+1)
-            
-            e += self.P[level] @ ec
-            e += spsolve_triangular(self.U[level].to_scipy(), r - self.A[level] @ e, lower=False)
-            for s in range(self.sstep):
-                e += spsolve_triangular(self.U[level].to_scipy(), r - self.A[level] @ e,lower=False)
+        if level == (NL - 1): # 如果是最粗层
+            e = spsolve(self.A[-1].to_scipy(), r)
             return e
+
+        e = spsolve_triangular(self.L[level].to_scipy(), r)
+        for s in range(self.sstep):
+            e += spsolve_triangular(self.L[level].to_scipy(), r - self.A[level] @ e) 
+
+        rc = self.R[level] @ ( r - self.A[level] @ e) 
+
+        ec = self.wcycle(rc, level=level+1)
+        ec += self.wcycle( rc - self.A[level+1] @ ec, level=level+1)
         
-        elif self.device == 'cuda':
-            if level == (NL - 1): # 如果是最粗层
-                e = spsolve(self.A[-1], r)
-                return e
+        e += self.P[level] @ ec
+        e += spsolve_triangular(self.U[level].to_scipy(), r - self.A[level] @ e, lower=False)
+        for s in range(self.sstep):
+            e += spsolve_triangular(self.U[level].to_scipy(), r - self.A[level] @ e,lower=False)
+        return e
+        
 
-            e = bm.tensor(spsolve_triangular(self.L[level], r),**self.kargs)
-            for s in range(self.sstep):
-                e += bm.tensor(spsolve_triangular(self.L[level], r - self.A[level] @ e) ,**self.kargs)
-
-            rc = self.R[level] @ ( r - self.A[level] @ e) 
-
-            ec = self.wcycle(rc, level=level+1)
-            ec += self.wcycle( rc - self.A[level+1] @ ec, level=level+1)
-            
-            e += self.P[level] @ ec
-            e += bm.tensor(spsolve_triangular(self.U[level], r - self.A[level] @ e, lower=False),**self.kargs)
-            for s in range(self.sstep):
-                e += bm.tensor(spsolve_triangular(self.U[level], r - self.A[level] @ e,lower=False),**self.kargs)
-            return e
 
     def fcycle(self, r):
         """
@@ -347,11 +300,7 @@ class GAMGSolver():
             e.append(el)
             r.append(self.R[l] @ (r[l] - self.A[l] @ e[l]))
 
-        # 最粗层直接求解 
-        if self.device == 'cpu':
-            ec = spsolve(self.A[-1].to_scipy(), r[-1])
-        elif self.device == 'cuda':
-            ec = spsolve(self.A[-1],r[-1])
+        ec = spsolve(self.A[-1].to_scipy(), r[-1])
         e.append(ec)
 
         # 从次最粗层到最细层
