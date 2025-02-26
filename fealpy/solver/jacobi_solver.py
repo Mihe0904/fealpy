@@ -11,10 +11,12 @@ from .. import logger
 class SupportsMatmul(Protocol):
     def __matmul__(self, other: TensorLike) -> TensorLike: ...
 
+
 def jacobi(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None,
        atol: float=1e-12, rtol: float=1e-8,
        maxit: Optional[int]=10000, returninfo: bool=False) -> TensorLike:
-    """Solve a linear system Ax = b using the Conjugate Gradient (CG) method.
+    """
+    Solve a linear system Ax = b using the Conjugate Gradient (CG) method.
 
     Parameters:
         A (SupportsMatmul): The coefficient matrix of the linear system.
@@ -49,14 +51,12 @@ def jacobi(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None,
         if x0.shape != b.shape:
             raise ValueError("x0 and b must have the same shape")
 
-    #张量分裂
     info = {}
     U = A.triu(k=1)
     L = A.tril(k=-1)
     M = A - L- U
     N = L+U
     
-
     err = 1
     niter = 0
     x = x0
@@ -75,9 +75,10 @@ def jacobi(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None,
         if (maxit is not None) and (niter >= maxit):
             logger.info(f"Jacobi: failed, stopped by maxit ({maxit}).")
             break
+
     info['residual'] = res    
     info['niter'] = niter 
     if returninfo is True:
-        return x,info
+        return x, info
     if returninfo is True:
         return x

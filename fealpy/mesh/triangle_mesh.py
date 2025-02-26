@@ -278,9 +278,15 @@ class TriangleMesh(SimplexMesh, Plotable):
     
     def prolongation_matrix(self, p0: int, p1: int):
         """
-        @brief :the prolongation_matrix from p0 to p1: 0 < p0 < p1
-        """
+        Return the prolongation_matrix from p0 to p1: 0 < p0 < p1
 
+        Parameters:
+            p0(int): The degree of the lowest-order space.
+            p1(int): The degree of the highest-order space.
+
+        Returns:
+            CSRTensor: the prolongation_matrix from p0 to p1
+        """
         assert 0 < p0 < p1
 
         TD = self.top_dimension()#Geometric Dimension
@@ -290,6 +296,7 @@ class TriangleMesh(SimplexMesh, Plotable):
 
         kargs_node = bm.context(self.entity('node'))
         kargs_cell = bm.context(self.entity('cell'))
+
         # 1. Interpolation points on the mesh nodes: Inherit the original interpolation points
         NN = self.number_of_nodes()
         V_1 = bm.ones(NN,**kargs_node)
@@ -343,6 +350,7 @@ class TriangleMesh(SimplexMesh, Plotable):
         @brief 计算二维网格中每条边上的局部标架
         """
         pass
+    
     def edge_unit_tangent(self, index=_S):
         """
         @brief Calculate the tangent vector with unit length of each edge.See `Mesh.edge_tangent`.
@@ -358,9 +366,13 @@ class TriangleMesh(SimplexMesh, Plotable):
         Uniform refine the triangle mesh n times.
 
         Parameters:
-            n (int): times refine the triangle mesh.
-            surface (function): the surface function.
-            returnirm (bool): return the interpolation matrix list or not,列表中的插值矩阵从细到粗排列
+            n (int): Times refine the triangle mesh.
+            surface (function): The surface function.
+            returnirm (bool): Return the prolongation matrix list or not,from the finest to the the coarsest
+        
+        Returns:
+            mesh: The mesh obtained after uniformly refining n times.
+            List(CSRTensor): The prolongation matrix from the finest to the the coarsest
         """
         if returnim is True:
             IM = []

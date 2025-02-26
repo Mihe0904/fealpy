@@ -483,9 +483,15 @@ class TetrahedronMesh(SimplexMesh, Plotable):
 
     def prolongation_matrix(self, p0: int, p1: int):
         """
-        @brief :the prolongation_matrix from p0 to p1: 0 < p0 < p1
-        """
+        Return the prolongation_matrix from p0 to p1: 0 < p0 < p1
 
+        Parameters:
+            p0(int): The degree of the lowest-order space.
+            p1(int): The degree of the highest-order space.
+
+        Returns:
+            CSRTensor: the prolongation_matrix from p0 to p1
+        """
         assert 0 < p0 < p1
 
         TD = self.top_dimension()#Geometric Dimension
@@ -563,11 +569,15 @@ class TetrahedronMesh(SimplexMesh, Plotable):
 
     def uniform_refine(self, n=1, returnim=False):
         """
-        Perform uniform refinement on the tetrahedral mesh.
+        Uniform refine the tetrahedral mesh n times.
 
         Parameters:
-            n (int): times refine the triangle mesh.
-            returnirm (bool): return the interpolation matrix list or not,列表中的插值矩阵从细到粗排列
+            n (int): Times refine the triangle mesh.
+            returnirm (bool): Return the prolongation matrix list or not,from the finest to the the coarsest
+        
+        Returns:
+            mesh: The mesh obtained after uniformly refining n times.
+            List(CSRTensor): The prolongation matrix from the finest to the the coarsest
         """
         if returnim:
             IM = []

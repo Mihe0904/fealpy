@@ -1,5 +1,3 @@
-#!/usr/bin/python3
-# import ipdb
 from fealpy.decorator import barycentric
 from fealpy.utils import timer
 from fealpy import logger
@@ -12,22 +10,25 @@ from fealpy.fem import PoissonLFEMSolver
 import time
 from fealpy.sparse import CSRTensor
 
-# 初始化计时器和日志
+
 tmr = timer()
 next(tmr)
 
+# Different configurations: coarsest mesh size and number of refinements.
 configurations = [
     (2, 10),  
     (8, 8),   
     (32, 6)   
 ]
+
 pde = CosCosData()
 domain = pde.domain()
 
-# 遍历每种配置
+# Iterate over each configuration.
 for n, m in configurations:
     mesh = TriangleMesh.from_box(box=domain, nx=n, ny=n)
     IM = mesh.uniform_refine(n=m, returnim=True)
+
     p = 3  
     s0 = PoissonLFEMSolver(pde, mesh, p, timer=tmr, logger=logger)
     tmr.send(f"Running gamg_solve with (n, m) = ({n}, {m})")

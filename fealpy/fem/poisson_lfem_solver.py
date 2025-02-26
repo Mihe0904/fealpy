@@ -12,9 +12,21 @@ from fealpy.sparse import csr_matrix
 
 class PoissonLFEMSolver:
     """
+    A solver for integrating the finite element functions of the Poisson equation.
+
+    Parameters:
+        pde (fealpy.pde): The Poisson equation model.
+        mesh (fealpy.mesh): The mesh.
+        p (int): The degree of the basis function space.
+        timer (generator): The timer.
+        logger (Logger): The logger.
+
+    Returns:
+        Tensor: The numerical solutions under different solvers.
     """
     def __init__(self, pde, mesh, p, timer=None, logger=None):
         """
+        Initialize the finite element functions for solving the Poisson equation.
         """
         # 计时与日志
         self.timer = timer
@@ -42,9 +54,13 @@ class PoissonLFEMSolver:
 
     def cg_solve(self):
         """
+        Solve using the Conjugate Gradient solver.
+
+        Returns:
+            Tensor: The solution of the Conjugate Gradient solver.
         """
         from ..solver import cg 
-        self.uh[:],info = cg(self.A, self.b, maxit=5000, atol=1e-14, rtol=1e-14,returninfo=True)
+        self.uh[:], info = cg(self.A, self.b, maxit=5000, atol=1e-14, rtol=1e-14,returninfo=True)
         
         if self.timer is not None:
             self.timer.send(f"CG 方法求解 Poisson 方程线性系统")
@@ -57,9 +73,15 @@ class PoissonLFEMSolver:
         return self.uh
 
     def gs_solve(self):
+        """
+        Solve using the Gauss Seidel solver.
+
+        Returns:
+            Tensor: The solution of the Gauss Seidel solver.
+        """
         from ..solver import gs
 
-        self.uh[:],info = gs(self.A, self.b, maxit=5000, rtol=1e-8,returninfo=True)
+        self.uh[:], info = gs(self.A, self.b, maxit=5000, rtol=1e-8, returninfo=True)
         if self.timer is not None:
             self.timer.send(f"GS 方法求解 Poisson 方程线性系统")
         err = self.L2_error()
@@ -71,9 +93,15 @@ class PoissonLFEMSolver:
         return self.uh
     
     def jacobi_solve(self):
+        """
+        Solve using the Jacobi solver.
+
+        Returns:
+            Tensor: The solution of the Jacobi solver.
+        """
         from ..solver import jacobi
 
-        self.uh[:],info = jacobi(self.A, self.b, maxit=5000, rtol=1e-8,returninfo=True)
+        self.uh[:], info = jacobi(self.A, self.b, maxit=5000, rtol=1e-8, returninfo=True)
         if self.timer is not None:
             self.timer.send(f"Jacobi 方法求解 Poisson 方程线性系统")
         err = self.L2_error()
@@ -86,6 +114,17 @@ class PoissonLFEMSolver:
 
     def gamg_solve(self, P=None, cdegree=[1]):
         """
+        Solve using the Multigrid solver.
+
+        Parameters:
+            P(list[csr_matrix]): The interpolation matrix list or not,
+                                 from the finest to the the coarsest
+
+            cdgree(list[int]):   The list of degrees of the prolongation matrix spaces 
+                                 on the basis function space, from smallest to largest.
+        
+        Returns:
+            Tensor: The solution of the multigrid solver.
         """
         from ..solver import GAMGSolver
         solver = GAMGSolver(isolver='MG') 
@@ -93,7 +132,7 @@ class PoissonLFEMSolver:
             self.space = None
         cdegree = list(range(1,self.p))
         solver.setup(self.A, P=P, space=self.space, cdegree=cdegree)
-        self.uh[:],info = solver.solve(self.b)
+        self.uh[:], info = solver.solve(self.b)
         if self.timer is not None:
             self.timer.send(f"MG 方法求解 Poisson 方程离散系统")
         err = self.L2_error()
@@ -107,6 +146,12 @@ class PoissonLFEMSolver:
 
     def show_mesh_and_solution(self):
         """
+        Display the visualization results of the mesh and numerical solution.
+        return two figures simultaneously.
+
+        Returns:
+            The left figure shows the 2D view of the mesh.
+            The right figure shows the 3D surface plot of the numerical solution.
         """
         from matplotlib import pyplot as plt
         from mpl_toolkits.mplot3d import Axes3D
@@ -124,6 +169,11 @@ class PoissonLFEMSolver:
 
     def L2_error(self):
         """
+        Return the error.
+
+        Returns:
+            erroe(float):The error between the numerical solution 
+                         and the exact solution based on the grid.
         """
         return self.mesh.error(self.pde.solution, self.uh)
 

@@ -2,19 +2,21 @@ from typing import Optional, Protocol
 
 from ..backend import backend_manager as bm
 from ..backend import TensorLike
-from .mumps import spsolve, spsolve_triangular
 from ..sparse.coo_tensor import COOTensor
 from ..sparse.csr_tensor import CSRTensor
+from .mumps import spsolve, spsolve_triangular
 
 from .. import logger
 
 class SupportsMatmul(Protocol):
     def __matmul__(self, other: TensorLike) -> TensorLike: ...
 
+
 def gs(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None,
        atol: float=1e-12, rtol: float=1e-8,
        maxit: Optional[int]=10000,returninfo: bool=False) -> TensorLike:
-    """Solve a linear system Ax = b using the Conjugate Gradient (CG) method.
+    """
+    Solve a linear system Ax = b using the Conjugate Gradient (CG) method.
 
     Parameters:
         A (SupportsMatmul): The coefficient matrix of the linear system.
@@ -49,12 +51,10 @@ def gs(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None,
         if x0.shape != b.shape:
             raise ValueError("x0 and b must have the same shape")
 
-    #张量分裂
     info = {}
     U = A.triu(k=1)
     M = A.tril()#M = D-L，A = D-L-U
     
-
     err = 1
     niter = 0
     x = x0
@@ -64,7 +64,7 @@ def gs(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None,
         x = x_new
         a = b - A.matmul(x)
         res = bm.linalg.norm(b-A.matmul(x))
-        niter +=1
+        niter += 1
         if res < rtol :
             logger.info(f"Gauss Seidel: converged in {iter} iterations, "
                         "stopped by relative tolerance.")
@@ -76,6 +76,6 @@ def gs(A: SupportsMatmul, b: TensorLike, x0: Optional[TensorLike]=None,
     info['residual'] = res    
     info['niter'] = niter 
     if returninfo is True:
-        return x,info
+        return x, info
     if returninfo is True:
         return x
