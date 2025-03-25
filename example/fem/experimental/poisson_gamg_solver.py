@@ -16,9 +16,7 @@ next(tmr)
 
 # Different configurations: coarsest mesh size and number of refinements.
 configurations = [
-    (2, 10),  
-    (8, 8),   
-    (32, 6)   
+    (2, 10)
 ]
 
 pde = CosCosData()
@@ -28,15 +26,18 @@ domain = pde.domain()
 for n, m in configurations:
     mesh = TriangleMesh.from_box(box=domain, nx=n, ny=n)
     IM = mesh.uniform_refine(n=m, returnim=True)
+    # mesh.uniform_refine(n=m)
+    # mesh.uniform_bisect(n=m)
 
-    p = 3  
+    p = 1  
     s0 = PoissonLFEMSolver(pde, mesh, p, timer=tmr, logger=logger)
+    # print(s0.A.shape)
     tmr.send(f"Running gamg_solve with (n, m) = ({n}, {m})")
     s0.gamg_solve(IM)
     tmr.send(f"Completed gamg_solve for (n, m) = ({n}, {m})")
 
 s0.cg_solve()
-s0.gs_solve()
-s0.jacobi_solve()
+# s0.gs_solve()
+# s0.jacobi_solve()
 tmr.send(None)
 

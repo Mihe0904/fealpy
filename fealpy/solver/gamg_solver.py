@@ -7,6 +7,7 @@ from ..sparse.coo_tensor import COOTensor
 from ..sparse.csr_tensor import CSRTensor
 from .. import logger
 from ..utils import timer
+from fealpy.old.solver import amg_coarsen,amg_interpolation
 
 class GAMGSolver():
     """
@@ -41,7 +42,7 @@ class GAMGSolver():
             ctype: str = 'C', # 粗化方法
             itype: str = 'T', # 插值方法
             ptype: str = 'V', # 预条件类型
-            sstep: int = 1, # 默认光滑步数
+            sstep: int = 2, # 默认光滑步数
             isolver: str = 'MG', # 默认迭代解法器，还可以选择'MG'
             maxit: int = 200,   # 默认迭代最大次数
             csolver: str = 'direct', # 默认粗网格解法器
@@ -99,31 +100,37 @@ class GAMGSolver():
         elif mesh is not None: # geometric coarsening from finnest to coarsest
             pass
         else: # algebraic coarsening 
+            from scipy.sparse import tril,triu
+            from scipy.sparse.linalg import eigs
+            
             NN = bm.ceil(bm.log2(self.A[-1].shape[0])/2-4)
             NL = max(min( int(NN), 8), 2) # 估计粗化的层数 
             for l in range(NL):
-                self.L.append(self.A[-1].tril()) # 前磨光的光滑子
-                self.U.append(self.A[-1].triu()) # 后磨光的光滑子
-                isC, G = ruge_stuben_chen_coarsen(self.A[-1], self.theta)
-                p, r = two_points_interpolation(G, isC)
+                # self.L.append(self.A[-1].tril()) # 前磨光的光滑子
+                # self.U.append(self.A[-1].triu()) # 后磨光的光滑子
+                self.L.append(tril(self.A[-1]).tocsr()) # 前磨光的光滑子
+                self.U.append(triu(self.A[-1]).tocsr()) # 后磨光的光滑子
+                isC, G = amg_coarsen.ruge_stuben_chen_coarsen(self.A[-1], self.theta)
+                p, r = amg_interpolation.standard_interpolation(G, isC)
                 self.P.append(p)
                 self.R.append(r)
 
                 self.A.append(r @ self.A[-1] @ p)
+                
                 if self.A[-1].shape[0] < self.csize:
                     break
         
-            # # 计算最粗矩阵最大和最小特征值
-            # A = self.A[-1].toarray()
-            # emax, _ = eigs(A, 1, which='LM')
-            # emin, _ = eigs(A, 1, which='SM')
+            # 计算最粗矩阵最大和最小特征值
+            A = self.A[-1].toarray()
+            emax, _ = eigs(A, 1, which='LM')
+            emin, _ = eigs(A, 1, which='SM')
 
-            # # 计算条件数的估计值
-            # condest = abs(emax[0] / emin[0])
+            # 计算条件数的估计值
+            condest = abs(emax[0] / emin[0])
 
-            # if condest > 1e12:
-            #     N = self.A[-1].shape[0]
-            #     self.A[-1] += 1e-12*sp.eye(N)  
+            if condest > 1e12:
+                N = self.A[-1].shape[0]
+                self.A[-1] += 1e-12*sp.eye(N)  
 
     def construct_coarse_equation(self, A, F, level=1):
         """
@@ -204,7 +211,7 @@ class GAMGSolver():
 
         if self.isolver == 'CG':
             x0 = bm.zeros(N, **self.kargs)
-            x, info = cg(self.A[0], b, x0=x0, M=P, atol=self.atol, rtol=self.rtol, maxit=self.maxit)
+            x, info = cg(self.A[0], b, x0=x0, M=P, atol=self.atol, rtol=self.rtol, maxit=self.maxit, returninfo=True)
             return x,info
         elif self.isolver == 'MG':
             x0 = bm.zeros(N, **self.kargs)
@@ -276,21 +283,26 @@ class GAMGSolver():
 
         # Pre-smoothing
         for l in range(level, NL - 1, 1):
-            el = spsolve_triangular(self.L[l].to_scipy(), r[l])
+            # el = spsolve_triangular(self.L[l].to_scipy(), r[l])
+            el = spsolve_triangular(self.L[l], r[l])
             for i in range(self.sstep):
-                el += spsolve_triangular(self.L[l].to_scipy(), r[l] - self.A[l] @ el)
+                # el += spsolve_triangular(self.L[l].to_scipy(), r[l] - self.A[l] @ el)
+                el += spsolve_triangular(self.L[l], r[l] - self.A[l] @ el)
             e.append(el)
             r.append(self.R[l] @ (r[l] - self.A[l] @ el))
 
-        el = spsolve(self.A[-1].to_scipy(), r[-1])
+        # el = spsolve(self.A[-1].to_scipy(), r[-1])
+        el = spsolve(self.A[-1], r[-1])
         e.append(el)
 
         # Post-smoothing
         for l in range(NL - 2, level - 1, -1):
             e[l] += self.P[l] @ e[l + 1]
-            e[l] += spsolve_triangular(self.U[l].to_scipy(), r[l] - self.A[l] @ e[l], lower=False)
+            # e[l] += spsolve_triangular(self.U[l].to_scipy(), r[l] - self.A[l] @ e[l], lower=False)
+            e[l] += spsolve_triangular(self.U[l], r[l] - self.A[l] @ e[l], lower=False)
             for i in range(self.sstep): 
-                e[l] += spsolve_triangular(self.U[l].to_scipy(), r[l] - self.A[l] @ e[l], lower=False)
+                # e[l] += spsolve_triangular(self.U[l].to_scipy(), r[l] - self.A[l] @ e[l], lower=False)
+                e[l] += spsolve_triangular(self.U[l], r[l] - self.A[l] @ e[l], lower=False)
 
         return e[level]
     

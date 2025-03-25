@@ -5,6 +5,8 @@ from ..typing import TensorLike, Index, _S
 from .mesh_base import SimplexMesh
 from .plot import Plotable
 from fealpy.sparse import coo_matrix,csr_matrix
+# from scipy.sparse import coo_matrix,csr_matrix
+
 
 class TetrahedronMesh(SimplexMesh, Plotable): 
     def __init__(self, node, cell):
@@ -734,27 +736,81 @@ class TetrahedronMesh(SimplexMesh, Plotable):
         if rflag == True:
             self.construct()
 
-    def uniform_bisect(self, n=1):
+    def uniform_bisect(self, n=1, returnim = False):
+        """
+        Uniform refine the triangle mesh n times.
+
+        Parameters:
+            n (int): Times refine the triangle mesh.
+            returnirm (bool): Return the prolongation matrix list or not,from the finest to the the coarsest
+        
+        Returns:
+            mesh: The mesh obtained after uniformly refining n times.
+            List(CSRTensor): The prolongation matrix from the finest to the the coarsest
+        """
+        if returnim is True:
+            IM = []
+            
         for i in range(n):
-            self.bisect()
+            if returnim is True:
+                P = self.bisect(returnim = True)
+                IM.append(P)
+            else:
+                self.bisect()
+        
+        if returnim is True:
+            IM.reverse()
+            return IM
 
     def bisect_options(self, HB=None, data=None, disp=None):
         options = {'HB': HB, 'data': data, 'disp': disp}
         return options
            
     def bisect(self, isMarkedCell=None, data=None, returnim=False, options={'disp': True}):
+        """
+        Perform bisection refinement on a quadrilateral mesh to generate a finer mesh.
+
+        Parameters:
+            isMarkedCell (Optional[Tensor]): Integer tensor marking the indices of cells to be refined.
+                If None, all cells will be refined by default. The tensor shape should be (NC0,), with a data type of int32.
+
+            data (Optional[Tensor]): Additional data to be interpolated (e.g., physical fields), which should match the original mesh.
+                If provided, the data will be updated according to the interpolation matrix after refinement. Default is None.
+
+            returnim (Optional[bool]): Whether to return the interpolation matrix.
+                If True, returns the interpolation matrix IM in CSR format. Default is False.
+
+            options (Optional[dict]): Control options dictionary, containing the following keys:
+                - 'disp' (bool): Whether to print iteration information (e.g., changes in the number of nodes). Default is True.
+                - 'data' (dict): Data interpolation parameters (e.g., precision, normalization methods).
+                - 'HB' (HistoryBuffer): History buffer object, used to record multi-level mesh relationships.
+
+        Returns:
+            IM (Optional[CSRTensor]): Interpolation matrix (only returned when returnim=True),
+                with shape (NN_new, NN_old), representing the new nodes as a linear combination of the old nodes.
+
+        Algorithm:
+            1. Initialize pre-allocated memory to avoid dynamic expansion.
+            2. Iteratively refine marked cells, prioritizing the longest edge for splitting.
+            3. Detect non-conforming edges using sparse matrices to ensure mesh consistency.
+            4. If interpolation is needed, generate weights based on node generations (e.g., nodes of generation g have weights of 1/2^g).
+        """
+        from scipy.sparse import csr_matrix,coo_matrix
 
         if options['disp']:
             print('Bisection begining.......')
 
-        NN = self.number_of_nodes()
-        NC = self.number_of_cells()
-        NE = self.number_of_edges()
+        NN0 = self.number_of_nodes()
+        NC0 = self.number_of_cells()
+        NE0 = self.number_of_edges()
+        NN = NN0
+        NC = NC0
+        NE = NE0
 
         if options['disp']:
-            print('Current number of nodes:', NN)
-            print('Current number of edges:', NE)
-            print('Current number of cells:', NC)
+            print('Current number of nodes:', NN0)
+            print('Current number of edges:', NE0)
+            print('Current number of cells:', NC0)
 
         if ('data' in options) and (options['data'] is not None):
             oldnode = self.entity('node')
@@ -763,51 +819,60 @@ class TetrahedronMesh(SimplexMesh, Plotable):
         if ('HB' in options) and (options['HB'] is not None):
             HB = bm.tile(bm.arange(NC*4)[:, None], (1, 2))
             options["HB"] = HB
-   
-        if isMarkedCell is None: # 加密所有的单元
-            markedCell = bm.arange(NC, **self.ikwargs)
+            
+        if returnim is True:
+            shape = (NN, NN)
+            kwargs = bm.context(self.node)
+            values = bm.ones(NN, **kwargs)
+    
+            kwargs = bm.context(self.cell)
+            i0 = bm.arange(NN, **kwargs)
+            I = i0
+            J = i0
+
+            IM = csr_matrix((values,(I, J)), shape)   
+        
+        if isMarkedCell is None:
+            kwargs = bm.context(self.cell)
+            markedCell = bm.arange(NC, **kwargs)
         else:
+            assert isMarkedCell.dtype == bm.int32 
             markedCell, = bm.nonzero(isMarkedCell)
 
+        max_refine = bm.max(isMarkedCell) if isMarkedCell is not None else 1 
+
+        # 初始化 isMarkedCell（扩展空间以容纳新增单元）
+        if isMarkedCell is not None:
+            isMarkedCell = bm.concatenate((isMarkedCell, bm.zeros((2 ** max_refine)*NC, dtype=bm.int32)))     
         # allocate new memory for node and cell
-        node = bm.zeros((9*NN, 3), **self.fkwargs)
-        cell = bm.zeros((4*NC, 4), **self.ikwargs)
+        node = bm.zeros(((9 ** max_refine) *NN, 3), **self.fkwargs)
+        cell = bm.zeros(((4 ** max_refine) *NC, 4), **self.ikwargs)
 
         node = bm.set_at(node, slice(NN), self.entity('node'))
         cell = bm.set_at(cell, slice(NC), self.entity('cell'))
 
         for key in self.celldata:
-            data = bm.zeros(4*NC, **self.fkwargs)
+            data = bm.zeros((4 ** max_refine) *NC, **self.fkwargs)
             data = bm.set_at(data, slice(NC), self.celldata[key])
             data = bm.set_at(self.celldata , key, data.copy())
 
-        # 用于存储网格节点的代数，初始所有节点都为第 0 代
-        generation = bm.zeros(NN + 6*NC, dtype=bm.uint8)
+        generation = bm.zeros(NN + (6 ** max_refine) *NC, dtype=bm.uint8)
+        cutEdge = bm.zeros(((8 ** max_refine) *NN, 3), **self.ikwargs)# bisect_edge:[start_node,end_node,bisect_node]
+        nCut = 0# number of bisect_edge now
+        nonConforming = bm.ones((8 ** max_refine) *NN, dtype=bm.bool, device=self.device)#flag of nonConforming edge
 
-        # 用于记录被二分的边及其中点编号
-        cutEdge = bm.zeros((8*NN, 3), **self.ikwargs)
-
-        # 当前的二分边的数目
-        nCut = 0
-
-        # 非协调边的标记数组
-        nonConforming = bm.ones(8*NN, dtype=bm.bool, device=self.device)
-        IM = eye(NN)
         while len(markedCell) != 0:
-            # 标记最长边
+            # cell[:, :2] store the longest edge
             self.label(node, cell, markedCell)
-
-            # 获取标记单元的四个顶点编号
             p0 = cell[markedCell, 0]
             p1 = cell[markedCell, 1]
             p2 = cell[markedCell, 2]
             p3 = cell[markedCell, 3]
 
-            # 找到新的二分边和新的中点
             nMarked = len(markedCell)
             p4 = bm.zeros(nMarked, **self.ikwargs)
 
-            if nCut == 0: # 如果是第一次循环
+            if nCut == 0: 
                 idx = bm.arange(nMarked) # cells introduce new cut edges
             else:
                 # all non-conforming edges
@@ -824,7 +889,7 @@ class TetrahedronMesh(SimplexMesh, Plotable):
                 idx, = bm.nonzero(p4 == 0)
 
             if len(idx) != 0:
-                # 把需要二分的边唯一化
+                # unique needed_bisect edge
                 NE = len(idx)
                 cellCutEdge = bm.stack([p0[idx], p1[idx]])
                 cellCutEdge = bm.sort(cellCutEdge,axis=0)
@@ -836,7 +901,7 @@ class TetrahedronMesh(SimplexMesh, Plotable):
                             cellCutEdge[1, ...]
                         )
                     ), shape=(NN, NN))
-                # 获得唯一的边
+                # get the unique edge
                 i, j = s.nonzero()
                 i = bm.tensor(i,**self.ikwargs)
                 j = bm.tensor(j,**self.ikwargs)
@@ -848,20 +913,26 @@ class TetrahedronMesh(SimplexMesh, Plotable):
                 node = bm.set_at(node, slice(NN, NN+nNew), (node[i, :] + node[j, :])/2.0)
 
                 if returnim is True:
-                    val = bm.full(nNew, 0.5)
-                    I = coo_matrix(
-                            (val, (range(nNew), i)), shape=(nNew, NN),
-                            **self.fkwargs)
-                    I += coo_matrix(
-                            (val, (range(nNew), j)), shape=(nNew, NN),
-                            **self.fkwargs)
-                    I = bmat([[eye(NN)], [I]], format='csr')
-                    IM = I@IM
+                    shape = (NN + nNew, NN)
+
+                    kwargs = bm.context(node)
+                    values = bm.ones(NN+2*nNew, **kwargs) 
+                    values = bm.set_at(values, bm.arange(NN, NN+2*nNew), 0.5)
+                    
+                    kwargs = bm.context(cell)
+                    i0 = bm.arange(NN, **kwargs)
+                    i1 = bm.arange(NN, NN + nNew, **kwargs)
+                    I = bm.concatenate((i0, i1, i1))
+                    J = bm.concatenate((i0, i, j))
+
+                    P = csr_matrix((values,(I, J)), shape)
+                    IM = P@IM
 
                 nCut += nNew
                 NN += nNew
 
-                # 新点和旧点的邻接矩阵
+                # Adjacency matrix of new and old points：
+                # ensures adjacent cells share the same midpoint
                 I = cutEdge[newCutEdge][:, [2, 2]].reshape(-1)
                 J = cutEdge[newCutEdge][:, [0, 1]].reshape(-1)
                 val = bm.ones(len(I), dtype=bm.bool, device=self.device)
@@ -871,12 +942,10 @@ class TetrahedronMesh(SimplexMesh, Plotable):
                 i, j =  (nv2v[:, p0].multiply(nv2v[:, p1])).nonzero()
                 p4 = bm.set_at(p4, bm.array(j,**self.ikwargs), bm.array(i,**self.ikwargs))
 
-            # 如果新点的代数仍然为 0
             idx = (generation[p4] == 0)
             cellGeneration = bm.max(
                     generation[cell[markedCell[idx]]],
                     axis=-1)
-            # 第几代点
             generation = bm.set_at(generation, p4[idx], cellGeneration + 1)
             cell = bm.set_at(cell, (markedCell,0), p3)
             cell = bm.set_at(cell, (markedCell,1), p0)
@@ -894,18 +963,27 @@ class TetrahedronMesh(SimplexMesh, Plotable):
             if("HB" in options) and (options["HB"] is not None):
                 HB = options['HB']
                 HB = bm.set_at(HB, (slice(NC, NC+nMarked),1), HB[markedCell,1])
-            
+
+            if isMarkedCell is not None:
+                bm.add_at(isMarkedCell, markedCell, -1)
+                # 子单元继承父单元减 1 后的值
+                parent_refine = isMarkedCell[markedCell]
+                isMarkedCell = bm.set_at(
+                    isMarkedCell, 
+                    slice(NC, NC + nMarked), 
+                    parent_refine
+                )
+
             NC = NC + nMarked
             del cellGeneration, p0, p1, p2, p3, p4
 
-            # 找到非协调的单元
+            # find the nonComforming cell(contian comforming node)
             checkEdge, = bm.nonzero(nonConforming[:nCut])
             isCheckNode = bm.zeros(NN, dtype=bm.bool, device=self.device)
             isCheckNode = bm.set_at(isCheckNode, cutEdge[checkEdge], True)
             isCheckCell = bm.sum(
                     isCheckNode[cell[:NC]],
                     axis= -1) > 0
-            # 找到所有包含检查节点的单元编号
             checkCell, = bm.nonzero(isCheckCell)
             I = bm.repeat(checkCell, 4)
             J = cell[checkCell].reshape(-1)
@@ -915,18 +993,25 @@ class TetrahedronMesh(SimplexMesh, Plotable):
                         cell2node[:, cutEdge[checkEdge, 1]]
                         )).nonzero()
             markedCell = bm.unique(bm.array(i))
+
+            if isMarkedCell is not None:
+                mask, = bm.nonzero(isMarkedCell > 0)
+                if len(markedCell) > 0 and len(mask) > 0:
+                    markedCell = bm.concatenate([mask, markedCell])  # 正确合并数组
+                elif len(markedCell) == 0 and len(mask) > 0:
+                    markedCell = mask
+                else:
+                    markedCell = markedCell
+
             nonConforming = bm.set_at(nonConforming, checkEdge, False)
             nonConforming = bm.set_at(nonConforming, checkEdge[j], True)
-
 
         self.node = node[:NN]
         self.cell = cell[:NC]
         self.construct()
         
-
         for key in self.celldata:
             self.celldata = bm.set_at(self.celldata, key, self.celldata[key][:NC])
-            
 
         if("HB" in options) and (options["HB"] is not None):
             options['HB'] = options['HB'][:NC]
@@ -934,8 +1019,8 @@ class TetrahedronMesh(SimplexMesh, Plotable):
         if ('data' in options) and (options['data'] is not None):
             options['data'] = self.interpolation_with_HB(oldnode, oldcell, options['HB'], options['data'])
             
-
         if returnim is True:
+            IM = IM.tocsr()
             return IM
 
     def interpolation_with_HB(self, oldnode, oldcell, HB, data={}):

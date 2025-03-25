@@ -1,5 +1,6 @@
 import numpy as np
 import scipy.sparse as sp
+np.set_printoptions(threshold=np.inf)
 
 def ruge_stuben_chen_coarsen(A, theta=0.025):
     """
@@ -71,7 +72,6 @@ def ruge_stuben_chen_coarsen(A, theta=0.025):
 
     return isC, G
 
-
 def ruge_stuben_coarsen(A, theta=0.025):
     """
     @brief Ruge-Stuben 粗化方法
@@ -84,48 +84,59 @@ def ruge_stuben_coarsen(A, theta=0.025):
     # Delete weak connectness
     im, jm, sm = sp.find(Am)
     idx = (-sm > theta)
-    As = sp.coo_matrix((np.ones_like(sm[idx]), (im[idx], jm[idx])), shape=(N, N))
-    Am = sp.coo_matrix((sm[idx], (im[idx], jm[idx])), shape=(N, N))
+    As = sp.csr_matrix((np.ones_like(sm[idx]), (im[idx], jm[idx])), shape=(N, N))
+    Am = sp.csr_matrix((sm[idx], (im[idx], jm[idx])), shape=(N, N))
     Ass = (As + As.transpose()) / 2.0
 
     isF = np.zeros(N, dtype=bool)
     degIn = np.array(As.sum(axis=0)).flatten()
-    isF[degIn == 0] = True
+    #节点i的强连通点个数
+    isF[degIn == 0] = True#判断孤立点
 
     # Find an approximate maximal independent set and put to C set
     isC = np.zeros(N, dtype=bool)
     U = np.arange(N)
     degFin = np.zeros(N)
     while np.sum(isC) < N / 2 and len(U) > 20:
+        #强行终止条件：粗节点<20个或者粗节点大于等于一半细节点时
         isS = np.zeros(N, dtype=bool)
         degInAll = degIn + degFin
+        #强连通点个数：在原本的基础上，叠加与经过处理点的联通数
         isS[(np.random.rand(N) < 0.85 * degInAll / np.mean(degInAll)) & (degInAll > 0)] = True
         S = np.where(isS)[0]
-
-        i, j = sp.find(sp.triu(Ass[S][:, S], 1))
+        #返回候选点的全局索引
+        i, j, _ = sp.find(sp.triu(Ass[S][:, S], 1))
+        #返回候选点的强连通情况，忽略对角线
         idx = degInAll[S[i]] >= degInAll[S[j]]
+        #可能同时有两个相连的候选点，此时选择度数最大的那个候选点
         isS[S[j[idx]]] = False
         isS[S[i[~idx]]] = False
         isC[isS] = True
 
-        i, _ = sp.find(Ass[:, isC])
+        #与当前粗节点强连通的点设为细节点
+        i, _, _ = sp.find(Ass[:, isC])
         isF[i] = True
         U = np.where(~(isF | isC))[0]
 
+        #将已标记为细节点或粗节点的度数设为0，避免重复处理。
         degIn[isF | isC] = 0
         degFin = np.zeros(N)
-        degFin[U] = np.array(As[isF, U].sum(axis=0)).flatten()
+        #计算未决定节点与细节点之间的强连接数
+        degFin[U] = np.array(As[isF, :][:, U].sum(axis=0)).flatten()
 
         if len(U) <= 20:
             isC[U] = True
             U = []
 
     print(f'Number of coarse nodes: {np.sum(isC)}')
+    # return isC,Am
+
 
     allNode = np.arange(N)
     fineNode = allNode[~isC]
     Nf = len(fineNode)
     Nc = N - Nf
+
     coarseNode = np.arange(Nc)
     coarse2fine = np.where(isC)[0]
     fine2coarse = np.zeros(N, dtype=int)
@@ -143,10 +154,130 @@ def ruge_stuben_coarsen(A, theta=0.025):
     Pro = sp.coo_matrix((sp_vals, (ip, jp)), shape=(N, Nc))
     Res = Pro.transpose()
 
-    Ac = Res @ A @ Pro
-    return Ac, Pro, Res
+    # Ac = Res @ A @ Pro
+    return Pro,Res
 
-def aggregation_coarsen(self, A, theta=0.025):
+# def ruge_stuben_coarsen(A, theta=0.025):
+#     """
+#     Improved Python implementation of Ruge-Stuben coarsening 
+#     with closer alignment to MATLAB's coarsenAMGrs
+    
+#     Parameters:
+#         A : scipy.sparse.csr_matrix
+#             Symmetric positive definite matrix
+#         theta : float
+#             Strong connection threshold
+            
+#     Returns:
+#         Ac : scipy.sparse.csr_matrix
+#             Coarse grid matrix
+#         Pro : scipy.sparse.csr_matrix
+#             Prolongation operator
+#         Res : scipy.sparse.csr_matrix
+#             Restriction operator
+#     """
+#     # ============== 1. Strong Connection Matrix ==============
+#     N = A.shape[0]
+    
+#     # 1.1 Normalization by row maximum off-diagonal
+#     maxaij = A.min(axis=0)
+#     D = sp.diags(1/np.abs(maxaij).toarray().flatten())
+#     # D = diags(1/np.abs(maxaij), 0)
+#     Am = D @ A
+    
+#     # 1.2 Filter weak connections
+#     im, jm, sm = sp.find(Am)
+#     idx = (-sm > theta)
+#     As = sp.csr_matrix((np.ones_like(sm[idx]), (im[idx], jm[idx])), shape=(N, N))
+#     Ass = (As + As.T)/2  # Symmetrized version
+
+#     # ============== 2. Coarse Node Selection ==============
+#     isF = np.zeros(N, dtype=bool)
+#     degIn = np.array(As.sum(axis=0)).flatten()
+#     isF[degIn == 0] = True  # Isolated nodes -> fine
+    
+#     isC = np.zeros(N, dtype=bool)
+#     U = np.where(~(isF | isC))[0]  # Undecided nodes
+#     degFin = np.zeros(N)
+    
+#     while np.sum(isC) < N/2 and len(U) > 20:
+#         # 2.1 Probabilistic selection
+#         degInAll = degIn + degFin
+#         prob = 0.85 * degInAll / np.mean(degInAll) if np.mean(degInAll) > 0 else 0
+#         isS = (np.random.rand(N) < prob) & (degInAll > 0)
+#         S = np.where(isS)[0]
+        
+#         # 2.2 Conflict resolution
+#         rows, cols = sp.triu(Ass[S[:,None], S], 1).nonzero()
+#         i, j = S[rows], S[cols]
+#         mask = degInAll[i] >= degInAll[j]
+#         isS[j[mask]] = False
+#         isS[i[~mask]] = False
+#         isC[isS] = True
+        
+#         # 2.3 Update F-set
+#         neighbors = Ass[:, isC].nonzero()[0]
+#         isF[neighbors] = True
+#         U = np.where(~(isF | isC))[0]
+        
+#         # 2.4 Update degrees
+#         degIn[isF | isC] = 0
+#         degFin = np.zeros(N)
+#         degFin[U] = np.array(As[isF,:][:,U].sum(axis=0)).flatten()
+    
+#     # Finalize remaining nodes
+#     if len(U) <= 20:
+#         isC[U] = True
+    
+#     # ============== 3. Prolongation Operator ==============
+#     coarse_nodes = np.where(isC)[0]
+#     fine_nodes = np.where(~isC)[0]
+#     Nc = len(coarse_nodes)
+    
+#     # 3.1 Direct injection for C-points
+#     ip = coarse_nodes
+#     jp = np.arange(Nc)
+#     sp_data = np.ones(Nc)
+    
+#     # 3.2 Interpolation weights for F-points
+#     Afc = Am[fine_nodes,:][:,coarse_nodes]
+#     row_sum = np.array(Afc.sum(axis=1)).flatten()
+    
+#     # Handle no-connection cases
+#     zero_mask = (row_sum == 0)
+#     if np.any(zero_mask):
+#         # 仅修改受影响的行，而非整个矩阵
+#         affected_rows = fine_nodes[zero_mask]
+#         new_data = np.ones(len(affected_rows)*Nc)/Nc
+#         new_rows = np.repeat(affected_rows, Nc)
+#         new_cols = np.tile(jp, len(affected_rows))
+        
+#         # 合并原有数据和新数据
+#         orig_rows, orig_cols = Afc.nonzero()
+#         orig_data = Afc.data
+        
+#         ip = np.concatenate([ip, orig_rows, new_rows])
+#         jp = np.concatenate([jp, orig_cols, new_cols])
+#         sp_data = np.concatenate([sp_data, orig_data, new_data])
+#     else:
+#         # 正常情况下的处理
+#         rows, cols, vals = sp.find(Afc)
+#         row_sum = row_sum[rows]
+#         ip = np.concatenate([ip, fine_nodes[rows]])
+#         jp = np.concatenate([jp, cols])
+#         sp_data = np.concatenate([sp_data, vals/row_sum])
+    
+#     # 3.3 Build operators
+#     # print('ip',ip)
+#     # print('jp',jp)
+#     Pro = sp.csr_matrix((sp_data, (ip, jp)), shape=(N, Nc))
+#     Res = Pro.T
+#     Ac = Res @ A @ Pro
+    
+#     print(f'Number of coarse nodes: {np.sum(isC)}')
+#     return Ac, Pro, Res
+
+def aggregation_coarsen(A, theta=0.025):
     """
     @brief 
     """
@@ -166,7 +297,7 @@ def aggregation_coarsen(self, A, theta=0.025):
     As = sp.csr_matrix((sm[idx], (im[idx], jm[idx])), shape=(N, N))
     As += sp.eye(N)
     As1 = sp.csr_matrix(As, dtype=bool)
-    As2 = sp.triu(As1 @ As1, 1)
+    As2 = sp.triu(As1 @ As1, 1).tocsr()
 
     # Compute degree of vertex
     deg = np.sum(As1, axis=1)
@@ -178,6 +309,11 @@ def aggregation_coarsen(self, A, theta=0.025):
         return node2agg, As
 
     idx = (deg>0)
+    # 在计算 deg 时直接转成浮点数
+    deg = np.sum(As1, axis=1).astype(float)  # 关键修改：转 float
+    deg = np.squeeze(np.asarray(deg))
+
+# 然后原来的加法就能正常运行
     deg[idx] += 0.1 * np.random.rand(np.sum(idx))
 
     # Find an approximate maximal independent set and put to C set
@@ -191,7 +327,7 @@ def aggregation_coarsen(self, A, theta=0.025):
         isS[deg>0] = True
         S = np.where(isS)[0]
         S_As2 = As2[S,:][:,S]
-        i, j = sp.find(S_As2)
+        i, j, _ = sp.find(S_As2)
         idx = deg[S[i]] >= deg[S[j]]
         isS[S[j[idx]]] = False
         isS[S[i[~idx]]] = False
@@ -206,14 +342,14 @@ def aggregation_coarsen(self, A, theta=0.025):
 
         # Remove coarse nodes and add neighboring nodes to the aggregate
         U = np.where(isU)[0]
-        i, j = sp.find(As[isU,:][:,newC])
+        i, j, _ = sp.find(As[isU,:][:,newC])
         isF[U[i]] = True
         isU = ~(isF | isC)
         node2agg[U[i]] = node2agg[newC[j]]
         deg[newC] = 0
         deg[U[i]] = 0
         U = np.where(isU)[0]
-        i, _ = sp.find(As[U,:][:,isF])
+        i, _, _ = sp.find(As[U,:][:,isF])
         deg[U[i]] = 0
 
     agg2node = agg2node[:max(node2agg)+1]
@@ -221,7 +357,7 @@ def aggregation_coarsen(self, A, theta=0.025):
     # Add left vertices to existing agg
     while any(isU):
         U = np.where(isU)[0]
-        i, j = sp.find(As[:, isU])
+        i, j, _ = sp.find(As[:, isU])
         neighborAgg = node2agg[i]
         idx = (neighborAgg > 0)
         nAgg, neighborAgg = np.unique(neighborAgg[idx], return_counts=True)

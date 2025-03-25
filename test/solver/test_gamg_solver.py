@@ -115,4 +115,4 @@ class TestGAMGSolverInterfaces:
 
 if __name__ == "__main__":
     pytest.main(["./test_gamg_solver.py",'-k' ,"test_vcycle"])
-    test = TestGAMGSolverInterfaces()
+    test = TestGAMGSolverInterfaces()z

@@ -7,6 +7,7 @@ from ..fem import LinearForm, ScalarSourceIntegrator
 from ..fem import DirichletBC
 
 from fealpy.sparse import csr_matrix
+# from scipy.sparse import csr_matrix
 
 
 
@@ -48,6 +49,7 @@ class PoissonLFEMSolver:
 
         gdof = self.space.number_of_global_dofs()
         self.A, self.b = DirichletBC(self.space, gd=pde.solution).apply(A, b)
+        # self.A = self.A.to_scipy()
         if self.timer is not None:
             self.timer.send(f"处理 Poisson 方程 D 边界条件")
 
@@ -127,11 +129,13 @@ class PoissonLFEMSolver:
             Tensor: The solution of the multigrid solver.
         """
         from ..solver import GAMGSolver
-        solver = GAMGSolver(isolver='MG') 
+        solver = GAMGSolver(isolver='MG',ptype='W') 
         if self.p < 2:
             self.space = None
         cdegree = list(range(1,self.p))
+        self.logger.info(f"开始setup")
         solver.setup(self.A, P=P, space=self.space, cdegree=cdegree)
+        self.logger.info(f"setup结束")
         self.uh[:], info = solver.solve(self.b)
         if self.timer is not None:
             self.timer.send(f"MG 方法求解 Poisson 方程离散系统")

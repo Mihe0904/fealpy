@@ -2,11 +2,12 @@ from typing import Union, Optional, Callable
 from ..backend import backend_manager as bm 
 from ..typing import TensorLike, Index, _S
 from .. import logger
+from collections import defaultdict
 
 from .utils import simplex_gdof, simplex_ldof
 from .mesh_base import SimplexMesh, estr2dim
 from .plot import Plotable
-from fealpy.sparse import csr_matrix
+from fealpy.sparse import csr_matrix,coo_matrix
 from fealpy.sparse import CSRTensor,COOTensor
 class TriangleMesh(SimplexMesh, Plotable):
     def __init__(self, node: TensorLike, cell: TensorLike) -> None:
@@ -501,10 +502,32 @@ class TriangleMesh(SimplexMesh, Plotable):
     def odt_iterate(self):
         pass
 
-    def uniform_bisect(self, n=1):
-        for i in range(n):
-            self.bisect()
+    def uniform_bisect(self, n=1, returnim=False):
+        """
+        Uniform bisect the triangle mesh n times.
 
+        Parameters:
+            n (int): Times refine the triangle mesh.
+            returnirm (bool): Return the prolongation matrix list or not,from the finest to the the coarsest
+        
+        Returns:
+            mesh: The mesh obtained after uniformly refining n times.
+            List(CSRTensor): The prolongation matrix from the finest to the the coarsest
+        """
+        if returnim is True:
+            IM = []
+            
+        for i in range(n):
+            if returnim is True:
+                P = self.bisect_1(returnim = True)
+                IM.append(P)
+            else:
+                self.bisect_1()
+        
+        if returnim is True:
+            IM.reverse()
+            return IM
+        
     def bisect_options(
             self,
             HB=None,
@@ -521,7 +544,7 @@ class TriangleMesh(SimplexMesh, Plotable):
         }
         return options
 
-    def bisect(self, isMarkedCell=None, options={'disp': True}): #TODO
+    def bisect(self, isMarkedCell=None, returnim=False, options={'disp': True}): #TODO
         if options['disp']:
             print('Bisection begining......')
 
@@ -544,23 +567,22 @@ class TriangleMesh(SimplexMesh, Plotable):
         cell2cell = self.cell_to_cell()
         #cell2ipoint = self.cell_to_ipoint(self.p)
         isCutEdge = bm.zeros((NE,), dtype=bm.bool, device=self.device)
-
         if options['disp']:
             print('The initial number of marked elements:', isMarkedCell.sum())
-
         markedCell, = bm.nonzero(isMarkedCell)
         while len(markedCell) > 0:
             isCutEdge = bm.set_at(isCutEdge, cell2edge[markedCell, 0], True)
             refineNeighbor = cell2cell[markedCell, 0]
             markedCell = refineNeighbor[~isCutEdge[cell2edge[refineNeighbor, 0]]]
-
+        
         if options['disp']:
             print('The number of markedg edges: ', isCutEdge.sum())
 
-        edge2newNode = bm.zeros((NE,), dtype=self.itype, device=self.device)
-        edge2newNode = bm.set_at(edge2newNode, isCutEdge, bm.arange(NN, NN + isCutEdge.sum(), dtype=self.itype, device=self.device))
-
         node = self.node
+        kwargs = bm.context(node)
+        edge2newNode = bm.zeros((NE,), **kwargs)
+        edge2newNode = bm.set_at(edge2newNode, isCutEdge, bm.arange(NN, NN + isCutEdge.sum(), **kwargs))
+
         newNode = 0.5 * (node[edge[isCutEdge, 0], :] + node[edge[isCutEdge, 1], :])
         self.node = bm.concatenate((node, newNode), axis=0)
         cell2edge0 = cell2edge[:, 0]
@@ -568,37 +590,22 @@ class TriangleMesh(SimplexMesh, Plotable):
         if 'data' in options:
             pass
 
-        if 'IM' in options:
+        if returnim is True:
             nn = len(newNode)
-            IM = COOTensor( indices=bm.stack((bm.arange(NN), bm.arange(NN)), axis=0),
-                            values=bm.ones(NN), 
-                            shape=(NN + nn, NN))
-            # IM = coo_matrix((bm.ones(NN), (bm.arange(NN), bm.arange(NN))),
-            #                 shape=(NN + nn, NN))
-            val = bm.full((nn,), 0.5)
-            IM += COOTensor(indices=bm.stack((NN + bm.arange(nn), edge[isCutEdge, 0]), axis=0),
-                            values=val,
-                            shape=(NN + nn, NN))
-            # IM += coo_matrix(
-            #     (
-            #         val,
-            #         (
-            #             NN + bm.arange(nn),
-            #             edge[isCutEdge, 0]
-            #         )
-            #     ), shape=(NN + nn, NN))
-            IM += COOTensor(indices=bm.stack((NN + bm.arange(nn), edge[isCutEdge, 1]), axis=0),
-                            values=val,
-                            shape=(NN + nn, NN))
-            # IM += coo_matrix(
-            #     (
-            #         val,
-            #         (
-            #             NN + bm.arange(nn),
-            #             edge[isCutEdge, 1]
-            #         )
-            #     ), shape=(NN + nn, NN))
-            options['IM'] = IM.tocsr()
+            shape = (NN + nn, NN)
+
+            kwargs = bm.context(node)
+            values = bm.ones(NN+2*nn, **kwargs) 
+            values = bm.set_at(values, bm.arange(NN, NN+2*nn), 0.5)
+            
+            kwargs = bm.context(cell)
+            i0 = bm.arange(NN, **kwargs)
+            i1 = bm.arange(NN, NN + nn, **kwargs)
+            I = bm.concatenate((i0, i1, i1))
+            J = bm.concatenate((i0, edge[isCutEdge,0], edge[isCutEdge,1]))
+
+            P = csr_matrix((values,(I, J)), shape)
+            options['IM'] = P
 
         if 'HB' in options:
             options['HB'] = bm.arange(NC)
@@ -675,6 +682,9 @@ class TriangleMesh(SimplexMesh, Plotable):
         self.NN = self.node.shape[0]
         self.cell = cell
         self.construct()
+
+        if returnim is True:
+            return options['IM']
 
     def coarsen(self, isMarkedCell=None, options={}):
         """
@@ -925,38 +935,79 @@ class TriangleMesh(SimplexMesh, Plotable):
                 print("Number of cells after coarsen:", self.number_of_cells())
                 isMarkedCell = (options['numrefine'] < 0)
 
-    def bisect_1(self, isMarkedCell=None, options={'disp': True}):
-        GD = self.geo_dimension()
-        NN = self.number_of_nodes()
-        NC = self.number_of_cells()
-        NN0 = NN  # 记录下二分加密之前的节点数目
+    def bisect_1(self, returnim=True, isMarkedCell=None, options={'disp': True}):
+        """
+        Perform bisection refinement on a triangle mesh to generate a finer mesh.
 
+        Parameters:
+            isMarkedCell (Optional[Tensor]): Integer tensor marking the indices of cells to be refined.
+                If None, all cells will be refined by default. The tensor shape should be (NC0,), with a data type of int32.
+
+            returnim (Optional[bool]): Whether to return the interpolation matrix.
+                If True, returns the interpolation matrix IM in CSR format. Default is False.
+
+            options (Optional[dict]): Control options dictionary, containing the following keys:
+                - 'disp' (bool): Whether to print iteration information (e.g., changes in the number of nodes). Default is True.
+        Returns:
+            IM (Optional[CSRTensor]): Interpolation matrix (only returned when returnim=True),
+                with shape (NN_new, NN_old), representing the new nodes as a linear combination of the old nodes.
+
+        Algorithm:
+            1. Initialize pre-allocated memory to avoid dynamic expansion.
+            2. Iteratively refine marked cells, prioritizing the longest edge for splitting.
+            3. Detect non-conforming edges using sparse matrices to ensure mesh consistency.
+            4. If interpolation is needed, generate weights based on node generations (e.g., nodes of generation g have weights of 1/2^g).
+        """
+        # from scipy.sparse import csr_matrix
+        if options['disp']:
+            print('Bisection begining.......')
+
+        GD = self.geo_dimension()
+        NN0 = self.number_of_nodes()
+        NC0 = self.number_of_cells()
+        NE0 = self.number_of_edges()
+        NN = NN0
+        NC = NC0
+        NE = NE0
+
+        if options['disp']:
+            print('Current number of nodes:', NN0)
+            print('Current number of edges:', NE0)
+            print('Current number of cells:', NC0) 
+
+        if returnim is True:
+            shape = (NN, NN)
+            kwargs = bm.context(self.node)
+            values = bm.ones(NN, **kwargs)
+    
+            kwargs = bm.context(self.cell)
+            i0 = bm.arange(NN, **kwargs)
+            I = i0
+            J = i0
+
+            IM = csr_matrix((values,(I, J)), shape)
+        
         if isMarkedCell is None:
-            # 默认加密所有的单元
-            markedCell = bm.arange(NC, dtype=self.itype)
+            kwargs = bm.context(self.cell)
+            markedCell = bm.arange(NC, **kwargs)
         else:
+            assert isMarkedCell.dtype == bm.int32 
             markedCell, = bm.nonzero(isMarkedCell)
 
+        max_refine = bm.max(isMarkedCell) if isMarkedCell is not None else 1 
         # allocate new memory for node and cell
-        node = bm.zeros((5 * NN, GD), dtype=self.ftype, device=self.device)
-        cell = bm.zeros((3 * NC, 3), dtype=self.itype, device=self.device)
+        node = bm.zeros(((5 ** max_refine) * NN, GD), dtype=self.ftype, device=self.device)
+        cell = bm.zeros(((3 ** max_refine) * NC, 3), dtype=self.itype, device=self.device)
+        node = bm.set_at(node, slice(NN), self.entity('node'))
+        cell = bm.set_at(cell, slice(NC), self.entity('cell'))
 
-        if ('numrefine' in options) and (options['numrefine'] is not None):
-            options['numrefine'] = bm.concatenate((options['numrefine'], bm.zeros(2 * NC)))
-
-        node = bm.set_at(node , slice(NN), self.entity('node'))
-        cell = bm.set_at(cell , slice(NC), self.entity('cell'))
-
-        # 用于存储网格节点的代数，初始所有节点都为第 0 代
-        generation = bm.zeros(NN + 2 * NC, dtype=bm.uint8, device=self.device)
-
-        # 用于记录被二分的边及其中点编号
-        cutEdge = bm.zeros((4 * NN, 3), dtype=self.itype, device=self.device)
-
-        # 当前的二分边的数目
+        if isMarkedCell is not None:
+            isMarkedCell = bm.concatenate((isMarkedCell, bm.zeros((2 ** max_refine)*NC, dtype=bm.int32)))
+        generation = bm.zeros(NN + (2 ** max_refine) * NC, dtype=bm.uint8, device=self.device)
+        cutEdge = bm.zeros(((4 ** max_refine) * NN, 3), dtype=self.itype, device=self.device)
         nCut = 0
-        # 非协调边的标记数组
-        nonConforming = bm.ones(4 * NN, dtype=bm.bool, device=self.device)
+        nonConforming = bm.ones((4 ** max_refine) * NN, dtype=bm.bool, device=self.device)
+        
         while len(markedCell) != 0:
             # 标记最长边
             self.label(node, cell, markedCell)
@@ -979,36 +1030,49 @@ class TriangleMesh(SimplexMesh, Plotable):
                 I = cutEdge[ncEdge][:, [2, 2]].reshape(-1)
                 J = cutEdge[ncEdge][:, [0, 1]].reshape(-1)
                 val = bm.ones(len(I), dtype=bm.bool)
-                nv2v = csr_matrix(
-                    (val, (I, J)),
-                    shape=(NN, NN))
+                nv2v = csr_matrix((val, (I, J)), shape=(NN, NN))
                 i, j = (nv2v[:, p1].multiply(nv2v[:, p2])).nonzero()
-                p3 = bm.set_at(p3, bm.array(j,dtype=self.itype), bm.array(i,dtype=self.itype))
+                p3 = bm.set_at(p3, bm.array(j, dtype=self.itype), bm.array(i, dtype=self.itype))
                 idx, = bm.nonzero(p3 == 0)
 
             if len(idx) != 0:
                 # 把需要二分的边唯一化
                 NE = len(idx)
                 cellCutEdge = bm.stack([p1[idx], p2[idx]])
-                cellCutEdge = bm.sort(cellCutEdge,axis=0)
+                cellCutEdge = bm.sort(cellCutEdge, axis=0)
                 s = csr_matrix(
-                    (
-                        bm.ones(NE, dtype=bm.bool),
-                        (
-                            cellCutEdge[0, :],
-                            cellCutEdge[1, :]
-                        )
-                    ), shape=(NN, NN))
+                    (bm.ones(NE, dtype=bm.bool), 
+                    (cellCutEdge[0, :], cellCutEdge[1, :])), 
+                    shape=(NN, NN))
                 # 获得唯一的边
-                i, j = s.nonzero()
-                i = bm.tensor(i,dtype=self.itype, device=self.device)
-                j = bm.tensor(j,dtype=self.itype, device=self.device)
+                print(type(s))
+                # print(s.nonzero_slice)
+                i, j = s.nonzero_slice
+                i = bm.tensor(i, dtype=self.itype, device=self.device)
+                j = bm.tensor(j, dtype=self.itype, device=self.device)
                 nNew = len(i)
                 newCutEdge = bm.arange(nCut, nCut + nNew, device=self.device)
-                cutEdge = bm.set_at(cutEdge , (newCutEdge, 0) , i)
-                cutEdge = bm.set_at(cutEdge , (newCutEdge, 1) , j)
-                cutEdge = bm.set_at(cutEdge , (newCutEdge, 2) , bm.arange(NN, NN + nNew, device=self.device))
+                cutEdge = bm.set_at(cutEdge, (newCutEdge, 0), i)
+                cutEdge = bm.set_at(cutEdge, (newCutEdge, 1), j)
+                cutEdge = bm.set_at(cutEdge, (newCutEdge, 2), bm.arange(NN, NN + nNew, device=self.device))
                 node = bm.set_at(node, slice(NN, NN + nNew), 0.5 * (node[i, :] + node[j, :]))
+
+                if returnim is True:
+                    shape = (NN + nNew, NN)
+
+                    kwargs = bm.context(node)
+                    values = bm.ones(NN+2*nNew, **kwargs) 
+                    values = bm.set_at(values, bm.arange(NN, NN+2*nNew), 0.5)
+                    
+                    kwargs = bm.context(cell)
+                    i0 = bm.arange(NN, **kwargs)
+                    i1 = bm.arange(NN, NN + nNew, **kwargs)
+                    I = bm.concatenate((i0, i1, i1))
+                    J = bm.concatenate((i0, i, j))
+
+                    P = csr_matrix((values,(I, J)), shape)
+                    IM = P@IM
+
                 nCut += nNew
                 NN += nNew
 
@@ -1016,104 +1080,69 @@ class TriangleMesh(SimplexMesh, Plotable):
                 I = cutEdge[newCutEdge][:, [2, 2]].reshape(-1)
                 J = cutEdge[newCutEdge][:, [0, 1]].reshape(-1)
                 val = bm.ones(len(I), dtype=bm.bool, device=self.device)
-                nv2v = csr_matrix(
-                    (val, (I, J)),
-                    shape=(NN, NN))
+                nv2v = csr_matrix((val, (I, J)), shape=(NN, NN))
                 i, j = (nv2v[:, p1].multiply(nv2v[:, p2])).nonzero()
-                p3 = bm.set_at(p3, bm.array(j,dtype=self.itype, device=self.device), bm.array(i,dtype=self.itype, device=self.device))
+                p3 = bm.set_at(p3, bm.array(j, dtype=self.itype, device=self.device), 
+                            bm.array(i, dtype=self.itype, device=self.device))
 
             # 如果新点的代数仍然为 0
             idx = (generation[p3] == 0)
-            cellGeneration = bm.max(
-                generation[cell[markedCell[idx]]],
-                axis=-1)
+            cellGeneration = bm.max(generation[cell[markedCell[idx]]], axis=-1)
             # 第几代点
-            generation = bm.set_at(generation , p3[idx] , cellGeneration + 1)
-            cell = bm.set_at(cell ,(markedCell,0) , p3)
-            cell = bm.set_at(cell ,(markedCell,1) , p0)
-            cell = bm.set_at(cell ,(markedCell,2) , p1)
-            cell = bm.set_at(cell ,(slice(NC,NC+nMarked),0) , p3)
-            cell = bm.set_at(cell ,(slice(NC,NC+nMarked),1) , p2)
-            cell = bm.set_at(cell ,(slice(NC,NC+nMarked),2) , p0)
+            generation = bm.set_at(generation, p3[idx], cellGeneration + 1)
+            cell = bm.set_at(cell, (markedCell, 0), p3)
+            cell = bm.set_at(cell, (markedCell, 1), p0)
+            cell = bm.set_at(cell, (markedCell, 2), p1)
+            cell = bm.set_at(cell, (slice(NC, NC + nMarked), 0), p3)
+            cell = bm.set_at(cell, (slice(NC, NC + nMarked), 1), p2)
+            cell = bm.set_at(cell, (slice(NC, NC + nMarked), 2), p0)
 
-            if ('numrefine' in options) and (options['numrefine'] is not None):
-                bm.add_at(options['numrefine'], markedCell, -1)
-                options['numrefine'] = bm.set_at(options['numrefine'], slice(NC, NC + nMarked), 
-                                                 options['numrefine'][markedCell])
+            if isMarkedCell is not None:
+                bm.add_at(isMarkedCell, markedCell, -1)
+                parent_refine = isMarkedCell[markedCell]
+                isMarkedCell = bm.set_at(
+                    isMarkedCell, 
+                    slice(NC, NC + nMarked), 
+                    parent_refine
+                )
 
-            NC = NC + nMarked
+            NC += nMarked
             del cellGeneration, p0, p1, p2, p3
 
             # 找到非协调的单元
             checkEdge, = bm.nonzero(nonConforming[:nCut])
             isCheckNode = bm.zeros(NN, dtype=bm.bool, device=self.device)
             isCheckNode = bm.set_at(isCheckNode, cutEdge[checkEdge], True)
-            isCheckCell = bm.sum(
-                isCheckNode[cell[:NC]],
-                axis=-1) > 0
-            # 找到所有包含检查节点的单元编号
+            isCheckCell = bm.sum(isCheckNode[cell[:NC]], axis=-1) > 0
             checkCell, = bm.nonzero(isCheckCell)
             I = bm.repeat(checkCell, 3)
             J = cell[checkCell].reshape(-1)
             val = bm.ones(len(I), dtype=bm.bool, device=self.device)
             cell2node = csr_matrix((val, (I, J)), shape=(NC, NN))
             i, j = (cell2node[:, cutEdge[checkEdge, 0]].multiply(
-                    cell2node[:, cutEdge[checkEdge, 1]]
-                )).nonzero()
-              
+                    cell2node[:, cutEdge[checkEdge, 1]])).nonzero()
             markedCell = bm.unique(bm.array(i))
-            nonConforming = bm.set_at(nonConforming , checkEdge , False)
-            nonConforming = bm.set_at(nonConforming , checkEdge[j] , True)
+            
+            if isMarkedCell is not None:
+                mask, = bm.nonzero(isMarkedCell > 0)
+                if len(markedCell) > 0 and len(mask) > 0:
+                    markedCell = bm.concatenate([mask, markedCell])  # 正确合并数组
+                elif len(markedCell) == 0 and len(mask) > 0:
+                    markedCell = mask
+                else:
+                    markedCell = markedCell
 
-        if ('imatrix' in options) and (options['imatrix'] is True):
-            nn = NN - NN0
-            IM = coo_matrix(
-                (
-                    bm.ones(NN0),
-                    (
-                        bm.arange(NN0),
-                        bm.arange(NN0)
-                    )
-                ), shape=(NN, NN), dtype=self.ftype)
-            cutEdge = cutEdge[:nn]
-            val = bm.full((nn, 2), 0.5, dtype=self.ftype)
-
-            g = 2
-            markedNode, = bm.nonzero(generation == g)
-
-            N = len(markedNode)
-            while N != 0:
-                nidx = markedNode - NN0
-                i = cutEdge[nidx, 0]
-                j = cutEdge[nidx, 1]
-                ic = bm.zeros((N, 2), dtype=self.ftype)
-                jc = bm.zeros((N, 2), dtype=self.ftype)
-                ic = bm.set_at(ic, (i < NN0,0), 1.0)
-                jc = bm.set_at(jc, (j < NN0,1), 1.0)
-                ic = bm.set_at(ic, i >= NN0, val[i[i >= NN0] - NN0])
-                jc = bm.set_at(jc, j >= NN0, val[j[j >= NN0] - NN0])
-
-                val = bm.set_at(val , markedNode - NN0 , 0.5 * (ic + jc))
-                cutEdge = bm.set_at(cutEdge , (nidx[i >= NN0],0) , cutEdge[i[i >= NN0] - NN0,0])
-                cutEdge = bm.set_at(cutEdge , (nidx[j >= NN0],1) , cutEdge[j[j >= NN0] - NN0,1])
-                g += 1
-                markedNode, = bm.nonzero(generation == g)
-                N = len(markedNode)
-
-            IM += coo_matrix(
-                (
-                    val.flat,
-                    (
-                        cutEdge[:, [2, 2]].flat,
-                        cutEdge[:, [0, 1]].flat
-                    )
-                ), shape=(NN, NN0), dtype=self.ftype)
-            options['imatrix'] = IM.tocsr()
-
+            nonConforming = bm.set_at(nonConforming, checkEdge, False)
+            nonConforming = bm.set_at(nonConforming, checkEdge[j], True)
+            
         self.node = node[:NN]
         self.cell = cell[:NC]
         self.construct()
 
+        if returnim is True:
+            IM = IM.tocsr()
+            return IM
+    
     def jacobian_matrix(self, index: Index=_S):
         """
         @brief 获得三角形单元对应的 Jacobian 矩阵
